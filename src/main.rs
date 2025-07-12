@@ -10,7 +10,7 @@ use russh::{
     keys::ssh_key::{self, PublicKey, rand_core::OsRng},
     server::*,
 };
-use std::{collections::HashMap, path::Path, sync::Arc};
+use std::{collections::HashMap, fmt::format, path::Path, sync::Arc};
 use tokio::sync::{
     Mutex,
     mpsc::{UnboundedSender, unbounded_channel},
@@ -19,12 +19,11 @@ use tokio::sync::{
 type SshTerminal = Terminal<CrosstermBackend<TerminalHandle>>;
 
 struct App {
-    pub counter: usize,
 }
 
 impl App {
     pub fn new() -> App {
-        Self { counter: 0 }
+        Self { }
     }
 }
 
@@ -92,25 +91,29 @@ impl AppServer {
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-
-                for (_, (terminal, app)) in clients.lock().await.iter_mut() {
-                    app.counter += 1;
-
+                let mut cl = clients.lock().await;
+                let ids: Vec<usize> = cl.iter().map(|(e, _)| e.clone()).collect();
+                for (id, (terminal, app)) in cl.iter_mut() {
+                    let names: Vec<String> = ids
+                        .iter()
+                        .enumerate()
+                        .map(|(i, e)| {
+                            let mut r = format!("player {}", i + 1);
+                            if id == e {
+                                r = format!("{r} (you)");
+                            }
+                            r
+                        })
+                        .collect();
                     terminal
                         .draw(|f| {
                             let area = f.area();
                             f.render_widget(Clear, area);
-                            let style = match app.counter % 3 {
-                                0 => Style::default().fg(Color::Red),
-                                1 => Style::default().fg(Color::Green),
-                                _ => Style::default().fg(Color::Blue),
-                            };
-                            let paragraph = Paragraph::new(format!("Counter: {}", app.counter))
-                                .alignment(ratatui::layout::Alignment::Center)
+                            let style = Style::default();
+                            let paragraph = Paragraph::new(names.join("\n"))
+                                .alignment(ratatui::layout::Alignment::Left)
                                 .style(style);
-                            let block = Block::default()
-                                .title("Press 'c' to reset the counter!")
-                                .borders(Borders::ALL);
+                            let block = Block::default().title("[ Players ]").borders(Borders::ALL);
                             f.render_widget(paragraph.block(block), area);
                         })
                         .unwrap();
@@ -186,17 +189,13 @@ impl Handler for AppServer {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         match data {
-            // Pressing 'q' closes the connection.
             b"q" => {
                 self.clients.lock().await.remove(&self.id);
                 session.close(channel)?;
             }
-            // Pressing 'c' resets the counter for the app.
-            // Only the client with the id sees the counter reset.
             b"c" => {
                 let mut clients = self.clients.lock().await;
                 let (_, app) = clients.get_mut(&self.id).unwrap();
-                app.counter = 0;
             }
             _ => {}
         }
