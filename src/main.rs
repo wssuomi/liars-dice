@@ -18,12 +18,25 @@ use tokio::sync::{
 
 type SshTerminal = Terminal<CrosstermBackend<TerminalHandle>>;
 
-struct App {
-}
+struct App {}
 
 impl App {
     pub fn new() -> App {
-        Self { }
+        Self {}
+    }
+}
+
+struct ServerApp {
+    timer: isize,
+    turn: Option<usize>,
+}
+
+impl ServerApp {
+    pub fn new() -> ServerApp {
+        Self {
+            timer: 0,
+            turn: None,
+        }
     }
 }
 
@@ -76,6 +89,7 @@ impl std::io::Write for TerminalHandle {
 struct AppServer {
     clients: Arc<Mutex<HashMap<usize, (SshTerminal, App)>>>,
     id: usize,
+    app: Arc<Mutex<ServerApp>>,
 }
 
 impl AppServer {
@@ -83,16 +97,37 @@ impl AppServer {
         Self {
             clients: Arc::new(Mutex::new(HashMap::new())),
             id: 0,
+            app: Arc::new(Mutex::new(ServerApp::new())),
         }
     }
 
     pub async fn run(&mut self) -> Result<(), anyhow::Error> {
         let clients = self.clients.clone();
+        let app = self.app.clone();
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                let mut al = app.lock().await;
                 let mut cl = clients.lock().await;
                 let ids: Vec<usize> = cl.iter().map(|(e, _)| e.clone()).collect();
+                if ids.len() < 2 {
+                    al.turn = None;
+                    al.timer = 30;
+                }
+                if al.turn.is_some() {
+                    al.timer -= 1;
+                    if al.timer <= 0 {
+                        al.timer = 30;
+                        al.turn = Some(al.turn.unwrap() + 1);
+                        if al.turn.unwrap() >= ids.len() {
+                            al.turn = Some(0);
+                        }
+                    }
+                } else {
+                    if ids.len() >= 2 {
+                        al.turn = Some(0);
+                    }
+                }
                 for (id, (terminal, app)) in cl.iter_mut() {
                     let names: Vec<String> = ids
                         .iter()
@@ -101,6 +136,9 @@ impl AppServer {
                             let mut r = format!("player {}", i + 1);
                             if id == e {
                                 r = format!("{r} (you)");
+                            }
+                            if i == al.turn.unwrap_or(0) {
+                                r = format!("{r} ({})", al.timer);
                             }
                             r
                         })
