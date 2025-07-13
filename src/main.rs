@@ -64,6 +64,8 @@ struct ServerApp {
     turn: Option<usize>,
     state: State,
     bet: Bet,
+    totals: HashMap<usize, usize>,
+    prev_turn_id: usize,
 }
 
 impl ServerApp {
@@ -73,6 +75,8 @@ impl ServerApp {
             turn: None,
             state: State::Waiting,
             bet: Bet { amount: 0, face: 0 },
+            totals: HashMap::new(),
+            prev_turn_id: 0,
         }
     }
 }
@@ -195,8 +199,12 @@ impl AppServer {
                         if ids.len() <= 1 {
                             al.state = State::Waiting;
                         }
+                        al.totals.clear();
                         for (_, (_, app)) in cl.iter_mut() {
-                            app.rolls = Some(roll_dice())
+                            app.rolls = Some(roll_dice());
+                            for r in app.rolls.clone().unwrap().iter() {
+                                let _ = *al.totals.entry(*r).and_modify(|e| *e += 1).or_insert(1);
+                            }
                         }
                         al.state = State::Turn;
                     }
@@ -216,6 +224,7 @@ impl AppServer {
                             } else {
                                 al.turn = Some(0);
                             }
+                            al.prev_turn_id = ids[al.turn.unwrap()]
                         }
                         for (id, (_, app)) in cl.iter_mut() {
                             let names: Vec<String> = ids
@@ -244,7 +253,12 @@ impl AppServer {
                                     }
                                 }
                                 if app.liar {
-                                    // TODO: implement actual liar check
+                                    // TODO: remove player or remove ability to play
+                                    if al.bet.amount > al.totals[&al.bet.face] {
+                                        println!("liar!");
+                                    } else {
+                                        println!("not liar!");
+                                    }
                                     al.state = State::Roll;
                                     al.timer = 1;
                                 }
