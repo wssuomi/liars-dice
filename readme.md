@@ -21,3 +21,4 @@ ssh 127.0.0.1 -p 2222
 - enter to bid
 - space to call liar
 - calling liar succeeds when there is less total dice with the face than the player claims
+- q to quit
