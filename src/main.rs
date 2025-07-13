@@ -1,17 +1,18 @@
+use rand::prelude::*;
 use ratatui::{
     Terminal, TerminalOptions, Viewport,
     backend::CrosstermBackend,
     layout::Rect,
     prelude::*,
-    style::{Color, Style},
-    widgets::{Block, Borders, Clear, Padding, Paragraph},
+    style::Style,
+    widgets::{Block, Borders, Clear, Paragraph},
 };
 use russh::{
     Channel, ChannelId, Pty,
     keys::ssh_key::{self, PublicKey, rand_core::OsRng},
     server::*,
 };
-use std::{collections::HashMap, fmt::format, path::Path, sync::Arc};
+use std::{collections::HashMap, fmt::Display, path::Path, sync::Arc, usize};
 use tokio::sync::{
     Mutex,
     mpsc::{UnboundedSender, unbounded_channel},
@@ -19,17 +20,50 @@ use tokio::sync::{
 
 type SshTerminal = Terminal<CrosstermBackend<TerminalHandle>>;
 
-struct App {}
+struct App {
+    rolls: Option<Vec<usize>>,
+    names: Vec<String>,
+    amount: usize,
+    face: usize,
+    liar: bool,
+    bet: bool,
+}
 
 impl App {
     pub fn new() -> App {
-        Self {}
+        Self {
+            rolls: None,
+            names: vec![],
+            amount: 1,
+            face: 1,
+            liar: false,
+            bet: false,
+        }
+    }
+}
+
+enum State {
+    Waiting,
+    Roll,
+    Turn,
+}
+
+struct Bet {
+    face: usize,
+    amount: usize,
+}
+
+impl Display for Bet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} x {}", self.amount, self.face)
     }
 }
 
 struct ServerApp {
     timer: isize,
     turn: Option<usize>,
+    state: State,
+    bet: Bet,
 }
 
 impl ServerApp {
@@ -37,6 +71,8 @@ impl ServerApp {
         Self {
             timer: 0,
             turn: None,
+            state: State::Waiting,
+            bet: Bet { amount: 0, face: 0 },
         }
     }
 }
@@ -86,6 +122,14 @@ impl std::io::Write for TerminalHandle {
     }
 }
 
+fn roll_dice() -> Vec<usize> {
+    let mut rng = rand::rng();
+    (0..6)
+        .into_iter()
+        .map(|_| rng.random_range(1..=6))
+        .collect()
+}
+
 #[derive(Clone)]
 struct AppServer {
     clients: Arc<Mutex<HashMap<usize, (SshTerminal, App)>>>,
@@ -108,85 +152,239 @@ impl AppServer {
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                let ids: Vec<usize> = clients
+                    .lock()
+                    .await
+                    .iter()
+                    .map(|(e, _)| e.clone())
+                    .collect();
                 let mut al = app.lock().await;
                 let mut cl = clients.lock().await;
-                let ids: Vec<usize> = cl.iter().map(|(e, _)| e.clone()).collect();
-                if ids.len() < 2 {
-                    al.turn = None;
-                    al.timer = 30;
-                }
-                if al.turn.is_some() {
-                    al.timer -= 1;
-                    if al.timer <= 0 {
-                        al.timer = 30;
-                        al.turn = Some(al.turn.unwrap() + 1);
-                        if al.turn.unwrap() >= ids.len() {
-                            al.turn = Some(0);
+                match al.state {
+                    State::Waiting => {
+                        al.bet = Bet { face: 0, amount: 0 };
+                        al.timer += 1;
+                        al.timer %= 3;
+                        if ids.len() >= 2 {
+                            al.state = State::Roll;
+                        }
+                        for (id, (_, app)) in cl.iter_mut() {
+                            let names: Vec<String> = ids
+                                .iter()
+                                .enumerate()
+                                .map(|(i, e)| {
+                                    let mut r = format!("player {}", i + 1);
+                                    if id == e {
+                                        r = format!("{r} (you)");
+                                    }
+                                    r
+                                })
+                                .collect();
+                            app.amount = 1;
+                            app.face = 1;
+                            app.bet = false;
+                            app.liar = false;
+                            app.names = names;
                         }
                     }
-                } else {
-                    if ids.len() >= 2 {
-                        al.turn = Some(0);
+                    State::Roll => {
+                        al.timer = 30;
+                        if al.turn.is_none() {
+                            al.turn = Some(0);
+                        }
+                        if ids.len() <= 1 {
+                            al.state = State::Waiting;
+                        }
+                        for (_, (_, app)) in cl.iter_mut() {
+                            app.rolls = Some(roll_dice())
+                        }
+                        al.state = State::Turn;
+                    }
+                    State::Turn => {
+                        if ids.len() <= 1 {
+                            al.state = State::Waiting;
+                        }
+                        al.timer -= 1;
+                        // TODO: make valid bet after timer end
+                        if al.timer <= 0 {
+                            al.timer = 30;
+                            if al.turn.is_some() {
+                                al.turn = Some(al.turn.unwrap() + 1);
+                                if al.turn.unwrap() >= ids.len() {
+                                    al.turn = Some(0);
+                                }
+                            } else {
+                                al.turn = Some(0);
+                            }
+                        }
+                        for (id, (_, app)) in cl.iter_mut() {
+                            let names: Vec<String> = ids
+                                .iter()
+                                .enumerate()
+                                .map(|(i, e)| {
+                                    let mut r = format!("player {}", i + 1);
+                                    if id == e {
+                                        r = format!("{r} (you)");
+                                    }
+                                    if i == al.turn.unwrap_or(0) {
+                                        r = format!("{r} ({})", al.timer);
+                                    }
+                                    r
+                                })
+                                .collect();
+                            if id == &ids[al.turn.unwrap()] {
+                                if app.bet {
+                                    // TODO: give feedback if not valid bet
+                                    if app.face > al.bet.face || app.amount > al.bet.amount {
+                                        al.bet = Bet {
+                                            face: app.face,
+                                            amount: app.amount,
+                                        };
+                                        al.timer = 1;
+                                    }
+                                }
+                                if app.liar {
+                                    // TODO: implement actual liar check
+                                    al.state = State::Roll;
+                                    al.timer = 1;
+                                }
+                            }
+                            app.names = names;
+                            app.bet = false;
+                            app.liar = false;
+                        }
                     }
                 }
-                for (id, (terminal, app)) in cl.iter_mut() {
-                    let names: Vec<String> = ids
-                        .iter()
-                        .enumerate()
-                        .map(|(i, e)| {
-                            let mut r = format!("player {}", i + 1);
-                            if id == e {
-                                r = format!("{r} (you)");
-                            }
-                            if i == al.turn.unwrap_or(0) {
-                                r = format!("{r} ({})", al.timer);
-                            }
-                            r
-                        })
-                        .collect();
-                    terminal
-                        .draw(|f| {
-                            let area = Rect::new(0, 0, f.area().width, 6);
-                            f.render_widget(Clear, area);
-                            let style = Style::default();
-                            let paragraph = Paragraph::new(names.join("\n"))
-                                .alignment(ratatui::layout::Alignment::Left)
-                                .style(style);
-                            let block = Block::default().title("[ Players ]").borders(Borders::ALL);
-                            f.render_widget(paragraph.block(block), area);
+                match al.state {
+                    State::Waiting => {
+                        for (_, (terminal, app)) in cl.iter_mut() {
+                            terminal
+                                .draw(|f| {
+                                    let area = Rect::new(0, 0, f.area().width, 6);
+                                    f.render_widget(Clear, area);
+                                    let style = Style::default();
+                                    let paragraph = Paragraph::new(app.names.join("\n"))
+                                        .alignment(ratatui::layout::Alignment::Left)
+                                        .style(style);
+                                    let block =
+                                        Block::default().title("[ Players ]").borders(Borders::ALL);
+                                    f.render_widget(paragraph.block(block), area);
 
-                            let area = Rect::new(0, 6, f.area().width, f.area().height - 6);
-                            f.render_widget(Clear, area);
-                            let paragraph = Paragraph::new("test")
-                                .alignment(ratatui::layout::Alignment::Left)
-                                .style(style);
-                            let block = Block::default()
-                                .title("[ Liar's Dice ]")
-                                .borders(Borders::ALL);
-                            f.render_widget(paragraph.block(block), area);
+                                    let area = Rect::new(0, 6, f.area().width, f.area().height - 6);
+                                    f.render_widget(Clear, area);
+                                    let paragraph = Paragraph::new("test")
+                                        .alignment(ratatui::layout::Alignment::Left)
+                                        .style(style);
+                                    let block = Block::default()
+                                        .title("[ Liar's Dice ]")
+                                        .borders(Borders::ALL);
+                                    f.render_widget(paragraph.block(block), area);
 
-                            let l = Layout::default()
-                                .direction(Direction::Horizontal)
-                                .constraints(vec![
-                                    Constraint::Percentage(67),
-                                    Constraint::Percentage(33),
-                                ])
-                                .split(area.inner(Margin {
-                                    horizontal: 1,
-                                    vertical: 1,
-                                }));
-                            f.render_widget(
-                                Paragraph::new(format!("Your rolls: {}\n\n\nAmount: 1\n\nFace: 3", vec!["1", "5", "5", "3", "6"].join(" ")))
-                                    .alignment(ratatui::layout::Alignment::Center)
-                                    .block(Block::new().borders(Borders::ALL).title("[ Game ]")),
-                                l[0],
-                            );
-                            f.render_widget(
-                                Block::new().borders(Borders::ALL).title("[ History ]"),
-                                l[1],
-                            );
-                        })
-                        .unwrap();
+                                    let l = Layout::default()
+                                        .direction(Direction::Horizontal)
+                                        .constraints(vec![
+                                            Constraint::Percentage(67),
+                                            Constraint::Percentage(33),
+                                        ])
+                                        .split(area.inner(Margin {
+                                            horizontal: 1,
+                                            vertical: 1,
+                                        }));
+                                    f.render_widget(
+                                        Paragraph::new(format!(
+                                            "Waiting for players{}",
+                                            match al.timer {
+                                                0 => {
+                                                    ".  "
+                                                }
+                                                1 => {
+                                                    ".. "
+                                                }
+                                                2 => {
+                                                    "..."
+                                                }
+                                                _ => {
+                                                    "   "
+                                                }
+                                            }
+                                        ))
+                                        .alignment(ratatui::layout::Alignment::Center)
+                                        .block(
+                                            Block::new().borders(Borders::ALL).title("[ Game ]"),
+                                        ),
+                                        l[0],
+                                    );
+                                    f.render_widget(
+                                        Block::new().borders(Borders::ALL).title("[ History ]"),
+                                        l[1],
+                                    );
+                                })
+                                .unwrap();
+                        }
+                    }
+                    State::Roll => {}
+                    State::Turn => {
+                        for (_, (terminal, app)) in cl.iter_mut() {
+                            terminal
+                                .draw(|f| {
+                                    let area = Rect::new(0, 0, f.area().width, 6);
+                                    f.render_widget(Clear, area);
+                                    let style = Style::default();
+                                    let paragraph = Paragraph::new(app.names.join("\n"))
+                                        .alignment(ratatui::layout::Alignment::Left)
+                                        .style(style);
+                                    let block =
+                                        Block::default().title("[ Players ]").borders(Borders::ALL);
+                                    f.render_widget(paragraph.block(block), area);
+
+                                    let area = Rect::new(0, 6, f.area().width, f.area().height - 6);
+                                    f.render_widget(Clear, area);
+                                    let paragraph = Paragraph::new("test")
+                                        .alignment(ratatui::layout::Alignment::Left)
+                                        .style(style);
+                                    let block = Block::default()
+                                        .title("[ Liar's Dice ]")
+                                        .borders(Borders::ALL);
+                                    f.render_widget(paragraph.block(block), area);
+
+                                    let l = Layout::default()
+                                        .direction(Direction::Horizontal)
+                                        .constraints(vec![
+                                            Constraint::Percentage(67),
+                                            Constraint::Percentage(33),
+                                        ])
+                                        .split(area.inner(Margin {
+                                            horizontal: 1,
+                                            vertical: 1,
+                                        }));
+                                    f.render_widget(
+                                        Paragraph::new(format!(
+                                            "Your rolls: {}\nPrevious bet {}\n\n\nAmount: {}\n\nFace: {}",
+                                            (app.rolls
+                                                .clone()
+                                                .unwrap_or(vec![])
+                                                .iter()
+                                                .map(|e| e.to_string()))
+                                            .collect::<Vec<String>>()
+                                            .join(" "),
+                                            al.bet,
+                                            app.amount,
+                                            app.face,
+                                        ))
+                                        .alignment(ratatui::layout::Alignment::Center)
+                                        .block(
+                                            Block::new().borders(Borders::ALL).title("[ Game ]"),
+                                        ),
+                                        l[0],
+                                    );
+                                    f.render_widget(
+                                        Block::new().borders(Borders::ALL).title("[ History ]"),
+                                        l[1],
+                                    );
+                                })
+                                .unwrap();
+                        }
+                    }
                 }
             }
         });
@@ -263,11 +461,45 @@ impl Handler for AppServer {
                 self.clients.lock().await.remove(&self.id);
                 session.close(channel)?;
             }
-            b"c" => {
+            [27, 91, 65] | b"k" => {
                 let mut clients = self.clients.lock().await;
                 let (_, app) = clients.get_mut(&self.id).unwrap();
+                app.amount += 1;
             }
-            _ => {}
+            [27, 91, 66] | b"j" => {
+                let mut clients = self.clients.lock().await;
+                let (_, app) = clients.get_mut(&self.id).unwrap();
+                if app.amount > 1 {
+                    app.amount -= 1;
+                }
+            }
+            [27, 91, 68] | b"h" => {
+                let mut clients = self.clients.lock().await;
+                let (_, app) = clients.get_mut(&self.id).unwrap();
+                if app.face > 1 {
+                    app.face -= 1;
+                }
+            }
+            [27, 91, 67] | b"l" => {
+                let mut clients = self.clients.lock().await;
+                let (_, app) = clients.get_mut(&self.id).unwrap();
+                if app.face < 6 {
+                    app.face += 1;
+                }
+            }
+            [32] => {
+                let mut clients = self.clients.lock().await;
+                let (_, app) = clients.get_mut(&self.id).unwrap();
+                app.liar = true;
+            }
+            [13] => {
+                let mut clients = self.clients.lock().await;
+                let (_, app) = clients.get_mut(&self.id).unwrap();
+                app.bet = true;
+            }
+            _ => {
+                println!("{data:?}")
+            }
         }
 
         Ok(())
