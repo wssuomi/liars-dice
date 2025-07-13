@@ -27,6 +27,7 @@ struct App {
     face: usize,
     liar: bool,
     bet: bool,
+    can_play: bool,
 }
 
 impl App {
@@ -38,6 +39,7 @@ impl App {
             face: 1,
             liar: false,
             bet: false,
+            can_play: true,
         }
     }
 }
@@ -156,7 +158,7 @@ impl AppServer {
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                let ids: Vec<usize> = clients
+                let mut ids: Vec<usize> = clients
                     .lock()
                     .await
                     .iter()
@@ -164,6 +166,7 @@ impl AppServer {
                     .collect();
                 let mut al = app.lock().await;
                 let mut cl = clients.lock().await;
+                let mut to_remove: Option<usize> = None;
                 match al.state {
                     State::Waiting => {
                         al.bet = Bet { face: 0, amount: 0 };
@@ -216,6 +219,7 @@ impl AppServer {
                         // TODO: make valid bet after timer end
                         if al.timer <= 0 {
                             al.timer = 30;
+                            al.prev_turn_id = ids[al.turn.unwrap()];
                             if al.turn.is_some() {
                                 al.turn = Some(al.turn.unwrap() + 1);
                                 if al.turn.unwrap() >= ids.len() {
@@ -224,8 +228,8 @@ impl AppServer {
                             } else {
                                 al.turn = Some(0);
                             }
-                            al.prev_turn_id = ids[al.turn.unwrap()]
                         }
+                        let mut is_liar = false;
                         for (id, (_, app)) in cl.iter_mut() {
                             let names: Vec<String> = ids
                                 .iter()
@@ -241,31 +245,48 @@ impl AppServer {
                                     r
                                 })
                                 .collect();
-                            if id == &ids[al.turn.unwrap()] {
-                                if app.bet {
-                                    // TODO: give feedback if not valid bet
-                                    if app.face > al.bet.face || app.amount > al.bet.amount {
-                                        al.bet = Bet {
-                                            face: app.face,
-                                            amount: app.amount,
-                                        };
+                            if ids.get(al.turn.unwrap()).is_some() {
+                                if id == &ids[al.turn.unwrap()] {
+                                    if app.bet {
+                                        // TODO: give feedback if not valid bet
+                                        if app.face > al.bet.face || app.amount > al.bet.amount {
+                                            al.bet = Bet {
+                                                face: app.face,
+                                                amount: app.amount,
+                                            };
+                                            al.timer = 1;
+                                        }
+                                    }
+                                    if app.liar {
+                                        if al.bet.amount > al.totals[&al.bet.face] {
+                                            is_liar = true;
+                                            to_remove = Some(al.prev_turn_id);
+                                        } else {
+                                            app.can_play = false;
+                                            to_remove = Some(*id);
+                                        }
+                                        al.state = State::Roll;
                                         al.timer = 1;
                                     }
-                                }
-                                if app.liar {
-                                    // TODO: remove player or remove ability to play
-                                    if al.bet.amount > al.totals[&al.bet.face] {
-                                        println!("liar!");
-                                    } else {
-                                        println!("not liar!");
-                                    }
-                                    al.state = State::Roll;
-                                    al.timer = 1;
                                 }
                             }
                             app.names = names;
                             app.bet = false;
                             app.liar = false;
+                        }
+                        for (id, (_, app)) in cl.iter_mut() {
+                            if id == &al.prev_turn_id {
+                                if is_liar {
+                                    app.can_play = false;
+                                }
+                            }
+                        }
+                        if to_remove.is_some() {
+                            // cl.remove(&to_remove.unwrap());
+                            if cl.len() < 2 {
+                                al.state = State::Waiting;
+                            }
+                            ids.retain(|value| *value != to_remove.unwrap());
                         }
                     }
                 }
@@ -470,49 +491,72 @@ impl Handler for AppServer {
         data: &[u8],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
+        let mut clients = self.clients.lock().await;
         match data {
             b"q" => {
-                self.clients.lock().await.remove(&self.id);
+                clients.remove(&self.id);
                 session.close(channel)?;
             }
             [27, 91, 65] | b"k" => {
-                let mut clients = self.clients.lock().await;
                 let (_, app) = clients.get_mut(&self.id).unwrap();
                 app.amount += 1;
+                if !app.can_play {
+                    clients.remove(&self.id);
+                    session.close(channel)?;
+                }
             }
             [27, 91, 66] | b"j" => {
-                let mut clients = self.clients.lock().await;
                 let (_, app) = clients.get_mut(&self.id).unwrap();
                 if app.amount > 1 {
                     app.amount -= 1;
                 }
+                if !app.can_play {
+                    clients.remove(&self.id);
+                    session.close(channel)?;
+                }
             }
             [27, 91, 68] | b"h" => {
-                let mut clients = self.clients.lock().await;
                 let (_, app) = clients.get_mut(&self.id).unwrap();
                 if app.face > 1 {
                     app.face -= 1;
                 }
+                if !app.can_play {
+                    clients.remove(&self.id);
+                    session.close(channel)?;
+                }
             }
             [27, 91, 67] | b"l" => {
-                let mut clients = self.clients.lock().await;
                 let (_, app) = clients.get_mut(&self.id).unwrap();
                 if app.face < 6 {
                     app.face += 1;
                 }
+                if !app.can_play {
+                    clients.remove(&self.id);
+                    session.close(channel)?;
+                }
             }
             [32] => {
-                let mut clients = self.clients.lock().await;
                 let (_, app) = clients.get_mut(&self.id).unwrap();
                 app.liar = true;
+                if !app.can_play {
+                    clients.remove(&self.id);
+                    session.close(channel)?;
+                }
             }
             [13] => {
-                let mut clients = self.clients.lock().await;
                 let (_, app) = clients.get_mut(&self.id).unwrap();
                 app.bet = true;
+                if !app.can_play {
+                    clients.remove(&self.id);
+                    session.close(channel)?;
+                }
             }
             _ => {
-                println!("{data:?}")
+                let (_, app) = clients.get_mut(&self.id).unwrap();
+                if !app.can_play {
+                    clients.remove(&self.id);
+                    session.close(channel)?;
+                }
             }
         }
 
