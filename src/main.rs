@@ -1,9 +1,5 @@
 use ratatui::{
-    Terminal, TerminalOptions, Viewport,
-    backend::CrosstermBackend,
-    layout::Rect,
-    style::{Color, Style},
-    widgets::{Block, Borders, Clear, Paragraph},
+    backend::CrosstermBackend, layout::Rect, prelude::*, style::{Color, Style}, widgets::{Block, Borders, Clear, Padding, Paragraph}, Terminal, TerminalOptions, Viewport
 };
 use russh::{
     Channel, ChannelId, Pty,
@@ -145,7 +141,7 @@ impl AppServer {
                         .collect();
                     terminal
                         .draw(|f| {
-                            let area = f.area();
+                            let area = Rect::new(0, 0, f.area().width, 6);
                             f.render_widget(Clear, area);
                             let style = Style::default();
                             let paragraph = Paragraph::new(names.join("\n"))
@@ -153,6 +149,32 @@ impl AppServer {
                                 .style(style);
                             let block = Block::default().title("[ Players ]").borders(Borders::ALL);
                             f.render_widget(paragraph.block(block), area);
+
+                            let area = Rect::new(0, 6, f.area().width, f.area().height - 6);
+                            f.render_widget(Clear, area);
+                            let paragraph = Paragraph::new("test")
+                                .alignment(ratatui::layout::Alignment::Left)
+                                .style(style);
+                            let block = Block::default()
+                                .title("[ Liar's Dice ]")
+                                .borders(Borders::ALL);
+                            f.render_widget(paragraph.block(block), area);
+
+                            let l = Layout::default()
+                                .direction(Direction::Horizontal)
+                                .constraints(vec![
+                                    Constraint::Percentage(67),
+                                    Constraint::Percentage(33),
+                                ])
+                                .split(area.inner(Margin { horizontal: 1, vertical: 1 }));
+                            f.render_widget(
+                                Block::new().borders(Borders::ALL).title("[ Game ]"),
+                                l[0],
+                            );
+                            f.render_widget(
+                                Block::new().borders(Borders::ALL).title("[ History ]"),
+                                l[1],
+                            );
                         })
                         .unwrap();
                 }
