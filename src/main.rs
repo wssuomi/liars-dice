@@ -1,5 +1,10 @@
 use ratatui::{
-    backend::CrosstermBackend, layout::Rect, prelude::*, style::{Color, Style}, widgets::{Block, Borders, Clear, Padding, Paragraph}, Terminal, TerminalOptions, Viewport
+    Terminal, TerminalOptions, Viewport,
+    backend::CrosstermBackend,
+    layout::Rect,
+    prelude::*,
+    style::{Color, Style},
+    widgets::{Block, Borders, Clear, Padding, Paragraph},
 };
 use russh::{
     Channel, ChannelId, Pty,
@@ -166,9 +171,14 @@ impl AppServer {
                                     Constraint::Percentage(67),
                                     Constraint::Percentage(33),
                                 ])
-                                .split(area.inner(Margin { horizontal: 1, vertical: 1 }));
+                                .split(area.inner(Margin {
+                                    horizontal: 1,
+                                    vertical: 1,
+                                }));
                             f.render_widget(
-                                Block::new().borders(Borders::ALL).title("[ Game ]"),
+                                Paragraph::new(format!("Your rolls: {}\n\n\nAmount: 1\n\nFace: 3", vec!["1", "5", "5", "3", "6"].join(" ")))
+                                    .alignment(ratatui::layout::Alignment::Center)
+                                    .block(Block::new().borders(Borders::ALL).title("[ Game ]")),
                                 l[0],
                             );
                             f.render_widget(
