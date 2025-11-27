@@ -22,6 +22,22 @@ const TURN_TIMEOUT: isize = 60;
 
 type SshTerminal = Terminal<CrosstermBackend<TerminalHandle>>;
 
+const INSTRUCTIONS: &[&str] = &[
+    "- instructions -",
+    "increase amount: up, k",
+    "increase face: right, l",
+    "decrease amount: up, j",
+    "decrease face: left, h",
+    "place bid: enter",
+    "call liar: space",
+    "quit: q",
+    "",
+    "- valid bid -",
+    "value is bigger than previously",
+    "or",
+    "face is bigger than previously",
+];
+
 struct App {
     rolls: Option<Vec<usize>>,
     names: Vec<String>,
@@ -231,11 +247,10 @@ impl AppServer {
                             }
                             if al.bid.face == 0 || al.bid.amount == 0 {
                                 al.bid = Bid { face: 1, amount: 1 }
-                            } else {
-                                al.bid.amount += 1;
                             }
                         }
                         let mut is_liar = false;
+                        let mut submitted = false;
                         for (id, (_, app)) in cl.iter_mut() {
                             let names: Vec<String> = ids
                                 .iter()
@@ -261,6 +276,7 @@ impl AppServer {
                                                 amount: app.amount,
                                             };
                                             al.timer = 1;
+                                            submitted = true;
                                         }
                                     }
                                     if app.liar {
@@ -273,6 +289,10 @@ impl AppServer {
                                         }
                                         al.state = State::Roll;
                                         al.timer = 1;
+                                        submitted = true;
+                                    }
+                                    if !submitted && al.timer <= 1 {
+                                        al.bid.amount += 1;
                                     }
                                 }
                             }
@@ -356,7 +376,20 @@ impl AppServer {
                                         l[0],
                                     );
                                     f.render_widget(
-                                        Block::new().borders(Borders::ALL).title("[ History ]"),
+                                        Paragraph::new(format!(
+                                            "{}",
+                                            (INSTRUCTIONS.iter().map(|e| e.to_string()))
+                                                .collect::<Vec<String>>()
+                                                .join("\n"),
+                                        ))
+                                        .alignment(ratatui::layout::Alignment::Center)
+                                        .block(
+                                            Block::new().borders(Borders::ALL).title("[ Game ]"),
+                                        ),
+                                        l[1],
+                                    );
+                                    f.render_widget(
+                                        Block::new().borders(Borders::ALL).title("[ Feed ]"),
                                         l[1],
                                     );
                                 })
@@ -419,7 +452,22 @@ impl AppServer {
                                         l[0],
                                     );
                                     f.render_widget(
-                                        Block::new().borders(Borders::ALL).title("[ History ]"),
+                                        Paragraph::new(format!(
+                                            "{}",
+                                            (INSTRUCTIONS
+                                                .iter()
+                                                .map(|e| e.to_string()))
+                                            .collect::<Vec<String>>()
+                                            .join("\n"),
+                                        ))
+                                        .alignment(ratatui::layout::Alignment::Center)
+                                        .block(
+                                            Block::new().borders(Borders::ALL).title("[ Game ]"),
+                                        ),
+                                        l[1],
+                                    );
+                                    f.render_widget(
+                                        Block::new().borders(Borders::ALL).title("[ Feed ]"),
                                         l[1],
                                     );
                                 })
@@ -541,6 +589,7 @@ impl Handler for AppServer {
                     session.close(channel)?;
                 }
             }
+            // 32: Space
             [32] => {
                 let (_, app) = clients.get_mut(&self.id).unwrap();
                 app.liar = true;
@@ -549,6 +598,7 @@ impl Handler for AppServer {
                     session.close(channel)?;
                 }
             }
+            // 13: Enter
             [13] => {
                 let (_, app) = clients.get_mut(&self.id).unwrap();
                 app.bid = true;
