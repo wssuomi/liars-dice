@@ -18,6 +18,8 @@ use tokio::sync::{
     mpsc::{UnboundedSender, unbounded_channel},
 };
 
+const TURN_TIMEOUT: isize = 30;
+
 type SshTerminal = Terminal<CrosstermBackend<TerminalHandle>>;
 
 struct App {
@@ -195,7 +197,7 @@ impl AppServer {
                         }
                     }
                     State::Roll => {
-                        al.timer = 30;
+                        al.timer = TURN_TIMEOUT;
                         if al.turn.is_none() {
                             al.turn = Some(0);
                         }
@@ -216,9 +218,8 @@ impl AppServer {
                             al.state = State::Waiting;
                         }
                         al.timer -= 1;
-                        // TODO: make valid bid after timer end
                         if al.timer <= 0 {
-                            al.timer = 30;
+                            al.timer = TURN_TIMEOUT;
                             al.prev_turn_id = ids[al.turn.unwrap()];
                             if al.turn.is_some() {
                                 al.turn = Some(al.turn.unwrap() + 1);
@@ -227,6 +228,11 @@ impl AppServer {
                                 }
                             } else {
                                 al.turn = Some(0);
+                            }
+                            if al.bid.face == 0 || al.bid.amount == 0 {
+                                al.bid = Bid { face: 1, amount: 1 }
+                            } else {
+                                al.bid.amount += 1;
                             }
                         }
                         let mut is_liar = false;
