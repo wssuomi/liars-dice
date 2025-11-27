@@ -18,7 +18,8 @@ use tokio::sync::{
     mpsc::{UnboundedSender, unbounded_channel},
 };
 
-const TURN_TIMEOUT: isize = 60;
+const TURN_TIMEOUT: i64 = 60;
+const FPS: u64 = 6;
 
 type SshTerminal = Terminal<CrosstermBackend<TerminalHandle>>;
 
@@ -80,7 +81,7 @@ impl Display for Bid {
 }
 
 struct ServerApp {
-    timer: isize,
+    timer: i64,
     turn: Option<usize>,
     state: State,
     bid: Bid,
@@ -175,7 +176,12 @@ impl AppServer {
         let app = self.app.clone();
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                // FIXME: Timeout 'seconds' are not accurate to actual seconds
+                let ns = 1_000_000_000;
+                let ft: u64 = ns / FPS;
+                tokio::time::sleep(tokio::time::Duration::from_nanos(1 * ft)).await;
+                let ft: i64 = ft.try_into().unwrap();
+                let ns: i64 = 1_000_000_000;
                 let mut ids: Vec<usize> = clients
                     .lock()
                     .await
@@ -188,8 +194,8 @@ impl AppServer {
                 match al.state {
                     State::Waiting => {
                         al.bid = Bid { face: 0, amount: 0 };
-                        al.timer += 1;
-                        al.timer %= 3;
+                        al.timer += ft;
+                        al.timer %= 3 * ns;
                         if ids.len() >= 2 {
                             al.state = State::Roll;
                         }
@@ -213,7 +219,7 @@ impl AppServer {
                         }
                     }
                     State::Roll => {
-                        al.timer = TURN_TIMEOUT;
+                        al.timer = TURN_TIMEOUT * ns;
                         if al.turn.is_none() {
                             al.turn = Some(0);
                         }
@@ -234,9 +240,9 @@ impl AppServer {
                         if ids.len() <= 1 {
                             al.state = State::Waiting;
                         }
-                        al.timer -= 1;
+                        al.timer -= ft;
                         if al.timer <= 0 {
-                            al.timer = TURN_TIMEOUT;
+                            al.timer = TURN_TIMEOUT * ns;
                             al.prev_turn_id = ids[al.turn.unwrap()];
                             if al.turn.is_some() {
                                 al.turn = Some(al.turn.unwrap() + 1);
@@ -276,7 +282,7 @@ impl AppServer {
                                                 face: app.face,
                                                 amount: app.amount,
                                             };
-                                            al.timer = 1;
+                                            al.timer = ft;
                                             submitted = true;
                                         }
                                     }
@@ -289,10 +295,10 @@ impl AppServer {
                                             to_remove = Some(*id);
                                         }
                                         al.state = State::Roll;
-                                        al.timer = 1;
+                                        al.timer = ft;
                                         submitted = true;
                                     }
-                                    if !submitted && al.timer <= 1 {
+                                    if !submitted && al.timer <= ft {
                                         al.bid.amount += 1;
                                     }
                                 }
@@ -352,10 +358,12 @@ impl AppServer {
                                             horizontal: 1,
                                             vertical: 1,
                                         }));
+                                    // FIXME: waiting animation is too fast
+                                    let t: i64 = (al.timer % 3).try_into().unwrap();
                                     f.render_widget(
                                         Paragraph::new(format!(
                                             "Waiting for players{}",
-                                            match al.timer {
+                                            match t {
                                                 0 => {
                                                     ".  "
                                                 }
