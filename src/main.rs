@@ -18,7 +18,7 @@ use tokio::sync::{
     mpsc::{UnboundedSender, unbounded_channel},
 };
 
-const TURN_TIMEOUT: isize = 30;
+const TURN_TIMEOUT: isize = 60;
 
 type SshTerminal = Terminal<CrosstermBackend<TerminalHandle>>;
 
