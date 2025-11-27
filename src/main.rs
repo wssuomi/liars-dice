@@ -95,7 +95,7 @@ impl ServerApp {
             turn: None,
             state: State::Waiting,
             bid: Bid { amount: 0, face: 0 },
-            totals: HashMap::new(),
+            totals: HashMap::from([(1, 0), (2, 0), (3, 0), (3, 0), (4, 0), (5, 0), (6, 0)]),
             prev_turn_id: 0,
         }
     }
@@ -220,7 +220,8 @@ impl AppServer {
                         if ids.len() <= 1 {
                             al.state = State::Waiting;
                         }
-                        al.totals.clear();
+                        al.totals =
+                            HashMap::from([(1, 0), (2, 0), (3, 0), (3, 0), (4, 0), (5, 0), (6, 0)]);
                         for (_, (_, app)) in cl.iter_mut() {
                             app.rolls = Some(roll_dice());
                             for r in app.rolls.clone().unwrap().iter() {
