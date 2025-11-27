@@ -26,7 +26,7 @@ struct App {
     amount: usize,
     face: usize,
     liar: bool,
-    bet: bool,
+    bid: bool,
     can_play: bool,
 }
 
@@ -38,7 +38,7 @@ impl App {
             amount: 1,
             face: 1,
             liar: false,
-            bet: false,
+            bid: false,
             can_play: true,
         }
     }
@@ -50,12 +50,12 @@ enum State {
     Turn,
 }
 
-struct Bet {
+struct Bid {
     face: usize,
     amount: usize,
 }
 
-impl Display for Bet {
+impl Display for Bid {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} x {}", self.amount, self.face)
     }
@@ -65,7 +65,7 @@ struct ServerApp {
     timer: isize,
     turn: Option<usize>,
     state: State,
-    bet: Bet,
+    bid: Bid,
     totals: HashMap<usize, usize>,
     prev_turn_id: usize,
 }
@@ -76,7 +76,7 @@ impl ServerApp {
             timer: 0,
             turn: None,
             state: State::Waiting,
-            bet: Bet { amount: 0, face: 0 },
+            bid: Bid { amount: 0, face: 0 },
             totals: HashMap::new(),
             prev_turn_id: 0,
         }
@@ -169,7 +169,7 @@ impl AppServer {
                 let mut to_remove: Option<usize> = None;
                 match al.state {
                     State::Waiting => {
-                        al.bet = Bet { face: 0, amount: 0 };
+                        al.bid = Bid { face: 0, amount: 0 };
                         al.timer += 1;
                         al.timer %= 3;
                         if ids.len() >= 2 {
@@ -189,7 +189,7 @@ impl AppServer {
                                 .collect();
                             app.amount = 1;
                             app.face = 1;
-                            app.bet = false;
+                            app.bid = false;
                             app.liar = false;
                             app.names = names;
                         }
@@ -216,7 +216,7 @@ impl AppServer {
                             al.state = State::Waiting;
                         }
                         al.timer -= 1;
-                        // TODO: make valid bet after timer end
+                        // TODO: make valid bid after timer end
                         if al.timer <= 0 {
                             al.timer = 30;
                             al.prev_turn_id = ids[al.turn.unwrap()];
@@ -247,10 +247,10 @@ impl AppServer {
                                 .collect();
                             if ids.get(al.turn.unwrap()).is_some() {
                                 if id == &ids[al.turn.unwrap()] {
-                                    if app.bet {
-                                        // TODO: give feedback if not valid bet
-                                        if app.face > al.bet.face || app.amount > al.bet.amount {
-                                            al.bet = Bet {
+                                    if app.bid {
+                                        // TODO: give feedback if not valid bid
+                                        if app.face > al.bid.face || app.amount > al.bid.amount {
+                                            al.bid = Bid {
                                                 face: app.face,
                                                 amount: app.amount,
                                             };
@@ -258,7 +258,7 @@ impl AppServer {
                                         }
                                     }
                                     if app.liar {
-                                        if al.bet.amount > al.totals[&al.bet.face] {
+                                        if al.bid.amount > al.totals[&al.bid.face] {
                                             is_liar = true;
                                             to_remove = Some(al.prev_turn_id);
                                         } else {
@@ -271,7 +271,7 @@ impl AppServer {
                                 }
                             }
                             app.names = names;
-                            app.bet = false;
+                            app.bid = false;
                             app.liar = false;
                         }
                         for (id, (_, app)) in cl.iter_mut() {
@@ -394,7 +394,7 @@ impl AppServer {
                                         }));
                                     f.render_widget(
                                         Paragraph::new(format!(
-                                            "Your rolls: {}\nPrevious bet {}\n\n\nAmount: {}\n\nFace: {}",
+                                            "Your rolls: {}\nPrevious bid {}\n\n\nAmount: {}\n\nFace: {}",
                                             (app.rolls
                                                 .clone()
                                                 .unwrap_or(vec![])
@@ -402,7 +402,7 @@ impl AppServer {
                                                 .map(|e| e.to_string()))
                                             .collect::<Vec<String>>()
                                             .join(" "),
-                                            al.bet,
+                                            al.bid,
                                             app.amount,
                                             app.face,
                                         ))
@@ -545,7 +545,7 @@ impl Handler for AppServer {
             }
             [13] => {
                 let (_, app) = clients.get_mut(&self.id).unwrap();
-                app.bet = true;
+                app.bid = true;
                 if !app.can_play {
                     clients.remove(&self.id);
                     session.close(channel)?;
